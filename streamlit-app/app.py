@@ -89,18 +89,26 @@ def markets_to_dataframe(markets: list[dict]) -> pd.DataFrame:
         # The Gamma API nests outcome prices inside outcomePrices / outcomes
         outcome_prices = m.get("outcomePrices", "")
         yes_prob = None
+        no_prob = None
         if outcome_prices:
             try:
                 import json
                 prices = json.loads(outcome_prices) if isinstance(outcome_prices, str) else outcome_prices
-                if isinstance(prices, list) and len(prices) > 0:
-                    yes_prob = parse_probability(prices[0])
+                if isinstance(prices, list):
+                    if len(prices) > 0:
+                        yes_prob = parse_probability(prices[0])
+                    if len(prices) > 1:
+                        no_prob = parse_probability(prices[1])
             except Exception:
                 pass
 
         # Fall back to bestAsk / bestBid if outcomePrices missing
         if yes_prob is None:
             yes_prob = parse_probability(m.get("bestAsk") or m.get("outcomePrices"))
+
+        # Derive NO from YES if not explicitly available
+        if no_prob is None and yes_prob is not None:
+            no_prob = round(100 - yes_prob, 2)
 
         volume_raw = m.get("volume", m.get("volumeNum", 0))
         liquidity_raw = m.get("liquidity", m.get("liquidityNum", 0))
@@ -109,6 +117,7 @@ def markets_to_dataframe(markets: list[dict]) -> pd.DataFrame:
             "id": m.get("id", ""),
             "question": m.get("question", m.get("title", "Untitled")),
             "yes_probability": yes_prob,
+            "no_probability": no_prob,
             "volume_usd": safe_float(volume_raw),
             "liquidity_usd": safe_float(liquidity_raw),
             "end_date": m.get("endDate", m.get("end_date_iso", "")),
@@ -145,16 +154,25 @@ def plot_top_by_volume(df: pd.DataFrame, n: int = 10) -> plt.Figure:
 
 
 def plot_top_by_probability(df: pd.DataFrame, n: int = 10) -> plt.Figure:
-    """Horizontal bar chart of top-N markets by YES probability."""
+    """Grouped horizontal bar chart of top-N markets by YES and NO probability."""
     valid = df.dropna(subset=["yes_probability"])
     top = valid.nlargest(n, "yes_probability").sort_values("yes_probability")
-    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.5)))
-    colors = ["#22c55e" if p >= 50 else "#ef4444" for p in top["yes_probability"]]
-    ax.barh(top["question"], top["yes_probability"], color=colors)
-    ax.set_xlabel("YES Probability (%)")
-    ax.set_title(f"Top {n} Markets by YES Probability")
+    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.6)))
+
+    import numpy as np
+    labels = [_wrap(q, 50) for q in top["question"]]
+    y_pos = np.arange(len(labels))
+    bar_height = 0.35
+
+    ax.barh(y_pos + bar_height / 2, top["yes_probability"], bar_height, label="YES", color="#22c55e")
+    ax.barh(y_pos - bar_height / 2, top["no_probability"].fillna(0), bar_height, label="NO", color="#ef4444")
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(labels, fontsize=8)
+    ax.set_xlabel("Probability (%)")
+    ax.set_title(f"Top {n} Markets — YES vs NO Probability")
     ax.set_xlim(0, 105)
-    ax.set_yticklabels([_wrap(q, 50) for q in top["question"]], fontsize=8)
+    ax.legend(loc="lower right")
     fig.tight_layout()
     return fig
 
@@ -206,8 +224,8 @@ def main():
 
     # --- Data table ----------------------------------------------------------
     st.subheader("Market Data")
-    display_df = df[["question", "yes_probability", "volume_usd", "liquidity_usd", "end_date"]].copy()
-    display_df.columns = ["Question", "YES Prob (%)", "Volume (USD)", "Liquidity (USD)", "End Date"]
+    display_df = df[["question", "yes_probability", "no_probability", "volume_usd", "liquidity_usd", "end_date"]].copy()
+    display_df.columns = ["Question", "YES Prob (%)", "NO Prob (%)", "Volume (USD)", "Liquidity (USD)", "End Date"]
     st.dataframe(display_df, use_container_width=True, height=400)
 
     # --- Charts --------------------------------------------------------------
