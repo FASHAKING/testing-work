@@ -139,40 +139,64 @@ def safe_float(val, default=0.0) -> float:
 # Chart helpers
 # ---------------------------------------------------------------------------
 
+def _apply_chart_style(fig, ax):
+    """Apply a consistent dark + colorful style to chart."""
+    fig.patch.set_facecolor("#0e1117")
+    ax.set_facecolor("#0e1117")
+    ax.tick_params(colors="#c4b5fd", labelsize=8)
+    ax.xaxis.label.set_color("#c4b5fd")
+    ax.yaxis.label.set_color("#c4b5fd")
+    ax.title.set_color("#f1f5f9")
+    ax.title.set_fontweight("bold")
+    for spine in ax.spines.values():
+        spine.set_color("#3b3b5c")
+    ax.grid(axis="x", color="#3b3b5c", linestyle="--", alpha=0.4)
+
+
 def plot_top_by_volume(df: pd.DataFrame, n: int = 10) -> plt.Figure:
     """Horizontal bar chart of top-N markets by trading volume."""
+    import numpy as np
     top = df.nlargest(n, "volume_usd").sort_values("volume_usd")
-    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.5)))
-    bars = ax.barh(top["question"], top["volume_usd"], color="#6366f1")
+    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.55)))
+
+    # Gradient-like colors from purple to pink
+    cmap = plt.cm.plasma
+    colors = [cmap(0.2 + 0.6 * i / max(n - 1, 1)) for i in range(len(top))]
+
+    ax.barh(top["question"], top["volume_usd"], color=colors, edgecolor="#1e1b4b", linewidth=0.5)
     ax.set_xlabel("Volume (USD)")
     ax.set_title(f"Top {n} Markets by Volume")
     ax.xaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
-    # Wrap long labels
     ax.set_yticklabels([_wrap(q, 50) for q in top["question"]], fontsize=8)
+    _apply_chart_style(fig, ax)
     fig.tight_layout()
     return fig
 
 
 def plot_top_by_probability(df: pd.DataFrame, n: int = 10) -> plt.Figure:
     """Grouped horizontal bar chart of top-N markets by YES and NO probability."""
+    import numpy as np
     valid = df.dropna(subset=["yes_probability"])
     top = valid.nlargest(n, "yes_probability").sort_values("yes_probability")
-    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.6)))
+    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.65)))
 
-    import numpy as np
     labels = [_wrap(q, 50) for q in top["question"]]
     y_pos = np.arange(len(labels))
     bar_height = 0.35
 
-    ax.barh(y_pos + bar_height / 2, top["yes_probability"], bar_height, label="YES", color="#22c55e")
-    ax.barh(y_pos - bar_height / 2, top["no_probability"].fillna(0), bar_height, label="NO", color="#ef4444")
+    ax.barh(y_pos + bar_height / 2, top["yes_probability"], bar_height,
+            label="YES", color="#34d399", edgecolor="#065f46", linewidth=0.5)
+    ax.barh(y_pos - bar_height / 2, top["no_probability"].fillna(0), bar_height,
+            label="NO", color="#fb7185", edgecolor="#881337", linewidth=0.5)
 
     ax.set_yticks(y_pos)
     ax.set_yticklabels(labels, fontsize=8)
     ax.set_xlabel("Probability (%)")
     ax.set_title(f"Top {n} Markets — YES vs NO Probability")
     ax.set_xlim(0, 105)
-    ax.legend(loc="lower right")
+    ax.legend(loc="lower right", facecolor="#1e1b4b", edgecolor="#7c3aed",
+              labelcolor="#f1f5f9", fontsize=9)
+    _apply_chart_style(fig, ax)
     fig.tight_layout()
     return fig
 
@@ -194,10 +218,84 @@ def _wrap(text: str, width: int) -> str:
 # Streamlit App
 # ---------------------------------------------------------------------------
 
+def inject_custom_css():
+    """Inject custom CSS for a vibrant, colorful dashboard."""
+    st.markdown("""
+    <style>
+    /* Gradient header banner */
+    .main > div:first-child {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 0.5rem;
+        border-radius: 0 0 16px 16px;
+    }
+    /* Title styling */
+    h1 {
+        background: linear-gradient(90deg, #f093fb, #f5576c, #fda085);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        font-weight: 800 !important;
+    }
+    /* Section headers */
+    h2, h3 {
+        color: #7c3aed !important;
+    }
+    /* Metric cards */
+    div[data-testid="stMetric"] {
+        background: linear-gradient(135deg, #1e1e2f, #2d2b55);
+        border: 1px solid #7c3aed;
+        border-radius: 12px;
+        padding: 16px;
+        box-shadow: 0 4px 15px rgba(124, 58, 237, 0.3);
+    }
+    div[data-testid="stMetric"] label {
+        color: #a78bfa !important;
+        font-weight: 600;
+    }
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: #f1f5f9 !important;
+        font-size: 1.5rem !important;
+    }
+    /* Sidebar styling */
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+    }
+    section[data-testid="stSidebar"] h2 {
+        color: #e2e8f0 !important;
+    }
+    /* Dataframe container */
+    div[data-testid="stDataFrame"] {
+        border: 2px solid #6366f1;
+        border-radius: 12px;
+        overflow: hidden;
+    }
+    /* Search input */
+    div[data-testid="stTextInput"] input {
+        border: 2px solid #8b5cf6 !important;
+        border-radius: 8px !important;
+    }
+    div[data-testid="stTextInput"] input:focus {
+        border-color: #f472b6 !important;
+        box-shadow: 0 0 10px rgba(244, 114, 182, 0.4) !important;
+    }
+    /* Divider lines */
+    hr {
+        border-color: #6366f1 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+
 def main():
-    st.set_page_config(page_title="Polymarket Dashboard", layout="wide")
+    st.set_page_config(
+        page_title="Polymarket Dashboard",
+        page_icon="<icon>",
+        layout="wide",
+    )
+    inject_custom_css()
+
     st.title("Polymarket Active Markets Dashboard")
-    st.caption("Data sourced from the Gamma API  |  https://gamma-api.polymarket.com")
+    st.caption("Real-time prediction market data from the Gamma API")
+    st.divider()
 
     # --- Sidebar controls ---------------------------------------------------
     st.sidebar.header("Settings")
@@ -213,7 +311,21 @@ def main():
         return
 
     df = markets_to_dataframe(raw_markets)
-    st.success(f"Loaded {len(df)} active markets.")
+
+    # --- Summary metric cards ------------------------------------------------
+    total_volume = df["volume_usd"].sum()
+    total_liquidity = df["liquidity_usd"].sum()
+    avg_yes = df["yes_probability"].mean()
+    avg_no = df["no_probability"].mean()
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("Markets Loaded", f"{len(df)}")
+    m2.metric("Total Volume", f"${total_volume:,.0f}")
+    m3.metric("Total Liquidity", f"${total_liquidity:,.0f}")
+    m4.metric("Avg YES Prob", f"{avg_yes:.1f}%" if pd.notna(avg_yes) else "N/A")
+    m5.metric("Avg NO Prob", f"{avg_no:.1f}%" if pd.notna(avg_no) else "N/A")
+
+    st.divider()
 
     # --- Search / filter -----------------------------------------------------
     search = st.text_input("Search markets by keyword")
@@ -227,6 +339,8 @@ def main():
     display_df = df[["question", "yes_probability", "no_probability", "volume_usd", "liquidity_usd", "end_date"]].copy()
     display_df.columns = ["Question", "YES Prob (%)", "NO Prob (%)", "Volume (USD)", "Liquidity (USD)", "End Date"]
     st.dataframe(display_df, use_container_width=True, height=400)
+
+    st.divider()
 
     # --- Charts --------------------------------------------------------------
     st.subheader("Charts")
@@ -242,6 +356,8 @@ def main():
         st.pyplot(fig_prob)
         plt.close(fig_prob)
 
+    st.divider()
+
     # --- Single market detail ------------------------------------------------
     st.subheader("Market Detail Lookup")
     market_id_input = st.text_input("Enter a market ID (condition ID or slug) to fetch details")
@@ -252,6 +368,15 @@ def main():
             st.json(details)
         else:
             st.warning("No data returned for that ID.")
+
+    # --- Footer --------------------------------------------------------------
+    st.divider()
+    st.markdown(
+        "<div style='text-align:center; color:#94a3b8; padding:1rem;'>"
+        "Polymarket Dashboard &mdash; Powered by the Gamma API"
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
 
 if __name__ == "__main__":
