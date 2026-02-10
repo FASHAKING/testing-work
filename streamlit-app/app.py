@@ -214,6 +214,230 @@ def detect_suspicious_markets(df: pd.DataFrame) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Insider Trading Detection Suite
+# ---------------------------------------------------------------------------
+
+def compute_insider_risk_scores(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Compute a composite Insider Risk Score (0-100) for each market.
+    The score combines multiple independent signals:
+      - Volume/Liquidity imbalance (order book strain)
+      - Probability conviction (extreme odds + high money = someone knows)
+      - Volume Z-score (statistical outlier)
+      - Liquidity drain indicator (thin book = exit before news)
+      - One-sided flow (lopsided YES/NO = coordinated push)
+    """
+    scored = df.copy()
+    if len(scored) < 3:
+        scored["insider_risk_score"] = 0
+        return scored
+
+    vol_mean = scored["volume_usd"].mean()
+    vol_std = scored["volume_usd"].std() or 1
+    liq_mean = scored["liquidity_usd"].mean() or 1
+
+    # --- Signal 1: Volume/Liquidity Imbalance (0-25) ---
+    scored["vol_liq_ratio"] = scored.apply(
+        lambda r: r["volume_usd"] / r["liquidity_usd"] if r["liquidity_usd"] > 0 else 0, axis=1
+    )
+    max_ratio = scored["vol_liq_ratio"].quantile(0.95) or 1
+    scored["sig_imbalance"] = (scored["vol_liq_ratio"] / max_ratio).clip(0, 1) * 25
+
+    # --- Signal 2: Conviction Score (0-25) ---
+    # How extreme is the probability * how much volume backs it
+    scored["prob_extremeness"] = scored["yes_probability"].apply(
+        lambda p: abs(p - 50) / 50 if pd.notna(p) else 0
+    )
+    scored["vol_percentile"] = scored["volume_usd"].rank(pct=True)
+    scored["sig_conviction"] = (scored["prob_extremeness"] * scored["vol_percentile"]) * 25
+
+    # --- Signal 3: Volume Z-Score (0-20) ---
+    scored["vol_zscore"] = (scored["volume_usd"] - vol_mean) / vol_std
+    scored["sig_volume_outlier"] = scored["vol_zscore"].clip(0, 4).apply(lambda z: z / 4 * 20)
+
+    # --- Signal 4: Liquidity Drain (0-15) ---
+    # Low liquidity relative to peers but non-trivial volume
+    scored["liq_ratio_to_mean"] = scored["liquidity_usd"] / liq_mean
+    scored["sig_liq_drain"] = scored.apply(
+        lambda r: max(0, (1 - r["liq_ratio_to_mean"])) * 15
+        if r["volume_usd"] > vol_mean * 0.3 else 0, axis=1
+    )
+
+    # --- Signal 5: One-Sided Flow (0-15) ---
+    # Extremely lopsided YES/NO = coordinated push
+    scored["sig_onesided"] = scored["yes_probability"].apply(
+        lambda p: ((abs(p - 50) / 50) ** 2) * 15 if pd.notna(p) else 0
+    )
+
+    # --- Composite Score ---
+    scored["insider_risk_score"] = (
+        scored["sig_imbalance"]
+        + scored["sig_conviction"]
+        + scored["sig_volume_outlier"]
+        + scored["sig_liq_drain"]
+        + scored["sig_onesided"]
+    ).round(1)
+
+    # Classify risk level
+    scored["risk_level"] = pd.cut(
+        scored["insider_risk_score"],
+        bins=[-1, 20, 40, 60, 80, 101],
+        labels=["Low", "Moderate", "Elevated", "High", "Critical"],
+    )
+
+    return scored
+
+
+def plot_risk_heatmap(scored_df: pd.DataFrame, n: int = 15) -> plt.Figure:
+    """Heatmap of top-N riskiest markets across all signal dimensions."""
+    top = scored_df.nlargest(n, "insider_risk_score")
+    signals = top[["sig_imbalance", "sig_conviction", "sig_volume_outlier",
+                    "sig_liq_drain", "sig_onesided"]].values
+    labels_y = [_wrap(q, 40) for q in top["question"]]
+    labels_x = ["Vol/Liq\nImbalance", "Conviction", "Volume\nOutlier",
+                "Liquidity\nDrain", "One-Sided\nFlow"]
+
+    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.5)))
+    im = ax.imshow(signals, cmap="YlOrRd", aspect="auto", vmin=0)
+
+    ax.set_xticks(range(len(labels_x)))
+    ax.set_xticklabels(labels_x, fontsize=9, color="#c4b5fd")
+    ax.set_yticks(range(len(labels_y)))
+    ax.set_yticklabels(labels_y, fontsize=7)
+    ax.xaxis.tick_top()
+
+    # Annotate cells with values
+    for i in range(len(labels_y)):
+        for j in range(len(labels_x)):
+            val = signals[i][j]
+            text_color = "#0e1117" if val > 10 else "#f1f5f9"
+            ax.text(j, i, f"{val:.0f}", ha="center", va="center",
+                    fontsize=8, fontweight="bold", color=text_color)
+
+    cbar = fig.colorbar(im, ax=ax, pad=0.02, shrink=0.8)
+    cbar.set_label("Signal Strength", color="#c4b5fd")
+    cbar.ax.yaxis.set_tick_params(color="#c4b5fd")
+    plt.setp(plt.getp(cbar.ax.axes, "yticklabels"), color="#c4b5fd")
+
+    ax.set_title("Insider Risk Signal Heatmap", color="#f1f5f9",
+                  fontsize=14, fontweight="bold", pad=20)
+    fig.patch.set_facecolor("#0e1117")
+    ax.tick_params(colors="#c4b5fd")
+    for spine in ax.spines.values():
+        spine.set_color("#3b3b5c")
+    fig.tight_layout()
+    return fig
+
+
+def plot_risk_radar(row: pd.Series) -> plt.Figure:
+    """Radar/spider chart for a single market's risk profile."""
+    categories = ["Vol/Liq\nImbalance", "Conviction", "Volume\nOutlier",
+                   "Liquidity\nDrain", "One-Sided\nFlow"]
+    max_vals = [25, 25, 20, 15, 15]
+    values = [
+        row.get("sig_imbalance", 0),
+        row.get("sig_conviction", 0),
+        row.get("sig_volume_outlier", 0),
+        row.get("sig_liq_drain", 0),
+        row.get("sig_onesided", 0),
+    ]
+    # Normalize to 0-1
+    normed = [v / m if m > 0 else 0 for v, m in zip(values, max_vals)]
+    normed.append(normed[0])  # close the polygon
+
+    angles = np.linspace(0, 2 * np.pi, len(categories), endpoint=False).tolist()
+    angles.append(angles[0])
+
+    fig, ax = plt.subplots(figsize=(5, 5), subplot_kw=dict(polar=True))
+    ax.fill(angles, normed, color="#f97316", alpha=0.25)
+    ax.plot(angles, normed, color="#f97316", linewidth=2)
+    ax.scatter(angles[:-1], normed[:-1], color="#ff0040", s=50, zorder=5)
+
+    ax.set_xticks(angles[:-1])
+    ax.set_xticklabels(categories, fontsize=8, color="#c4b5fd")
+    ax.set_ylim(0, 1)
+    ax.set_yticks([0.25, 0.5, 0.75, 1.0])
+    ax.set_yticklabels(["25%", "50%", "75%", "100%"], fontsize=7, color="#64748b")
+    ax.grid(color="#3b3b5c", linestyle="--", alpha=0.5)
+
+    q = row["question"]
+    title = q[:50] + "..." if len(q) > 50 else q
+    ax.set_title(f"Risk Profile: {title}", color="#f1f5f9", fontsize=10,
+                 fontweight="bold", pad=20)
+
+    fig.patch.set_facecolor("#0e1117")
+    ax.set_facecolor("#0e1117")
+    fig.tight_layout()
+    return fig
+
+
+def plot_risk_leaderboard(scored_df: pd.DataFrame, n: int = 10) -> plt.Figure:
+    """Bar chart leaderboard of top-N riskiest markets by composite score."""
+    top = scored_df.nlargest(n, "insider_risk_score").sort_values("insider_risk_score")
+    fig, ax = plt.subplots(figsize=(10, max(4, n * 0.55)))
+
+    scores = top["insider_risk_score"]
+    colors = []
+    for s in scores:
+        if s >= 80:
+            colors.append("#ff0040")
+        elif s >= 60:
+            colors.append("#f97316")
+        elif s >= 40:
+            colors.append("#fbbf24")
+        else:
+            colors.append("#6366f1")
+
+    bars = ax.barh(range(len(top)), scores, color=colors, edgecolor="#1e1b4b", linewidth=0.5)
+    ax.set_yticks(range(len(top)))
+    ax.set_yticklabels([_wrap(q, 45) for q in top["question"]], fontsize=8)
+    ax.set_xlabel("Insider Risk Score (0-100)")
+    ax.set_title(f"Top {n} Suspicious Markets \u2014 Risk Leaderboard")
+    ax.set_xlim(0, 105)
+
+    for bar, val in zip(bars, scores):
+        label_color = "#ff0040" if val >= 60 else "#fbbf24" if val >= 40 else "#818cf8"
+        ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2,
+                f"{val:.0f}", va="center", ha="left", color=label_color,
+                fontsize=9, fontweight="bold")
+
+    _apply_chart_style(fig, ax)
+    fig.tight_layout()
+    return fig
+
+
+def render_risk_score_gauge(score: float) -> str:
+    """Render an HTML gauge for a single risk score."""
+    if score >= 80:
+        color, glow, label = "#ff0040", "rgba(255,0,64,0.4)", "CRITICAL"
+    elif score >= 60:
+        color, glow, label = "#f97316", "rgba(249,115,22,0.4)", "HIGH"
+    elif score >= 40:
+        color, glow, label = "#fbbf24", "rgba(251,191,36,0.4)", "ELEVATED"
+    elif score >= 20:
+        color, glow, label = "#6366f1", "rgba(99,102,241,0.3)", "MODERATE"
+    else:
+        color, glow, label = "#22c55e", "rgba(34,197,94,0.3)", "LOW"
+
+    pct = min(score, 100)
+    return f"""
+    <div style="margin-bottom:6px;">
+        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
+            <span style="color:{color}; font-weight:800; font-size:0.75rem;
+                         letter-spacing:1px;">{label}</span>
+            <span style="color:{color}; font-weight:800; font-size:0.9rem;">{score:.0f}/100</span>
+        </div>
+        <div style="background:#1e1b4b; border-radius:6px; height:10px; overflow:hidden;
+                    box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);">
+            <div style="width:{pct}%; height:100%;
+                        background: linear-gradient(90deg, {color}99, {color});
+                        border-radius:6px; box-shadow: 0 0 8px {glow};"></div>
+        </div>
+    </div>
+    """
+
+
+# ---------------------------------------------------------------------------
 # Chart helpers
 # ---------------------------------------------------------------------------
 
@@ -688,69 +912,185 @@ def main():
 
     st.divider()
 
-    # --- Whale Alert / Suspicious Activity ------------------------------------
-    st.subheader("Whale Alert \u2014 Suspicious Activity Detector")
+    # --- Insider Trading Intelligence Suite ------------------------------------
+    st.subheader("Insider Trading Intelligence Suite")
     st.markdown(
         "<span style='color:#94a3b8; font-size:0.85rem;'>"
-        "Flagging markets with unusual patterns: massive volume relative to liquidity, "
-        "extreme probabilities with big money, and statistical outliers.</span>",
+        "Multi-signal analysis engine scoring every market for insider risk. "
+        "Combines volume/liquidity imbalance, conviction scoring, statistical outliers, "
+        "liquidity drain detection, and one-sided flow analysis.</span>",
         unsafe_allow_html=True,
     )
 
+    scored_df = compute_insider_risk_scores(df)
     alerts = detect_suspicious_markets(df)
 
-    if alerts:
-        for alert in alerts:
-            severity_colors = {
-                "critical": ("#ff0040", "#4a0011", "\u26a0\ufe0f CRITICAL"),
-                "high": ("#f97316", "#431407", "\U0001f6a8 HIGH"),
-                "medium": ("#fbbf24", "#451a03", "\u26a1 MEDIUM"),
-            }
-            color, bg, label = severity_colors.get(alert["severity"], ("#fbbf24", "#451a03", "\u26a1"))
-            st.markdown(f"""
-            <div style="
-                background: linear-gradient(135deg, {bg}, #0e1117);
-                border: 1px solid {color};
-                border-left: 5px solid {color};
-                border-radius: 10px;
-                padding: 16px 20px;
-                margin-bottom: 12px;
-                box-shadow: 0 0 20px {color}33;
-            ">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                    <span style="color:{color}; font-weight:800; font-size:0.8rem;
-                                 letter-spacing:1px; text-transform:uppercase;">
-                        {label} &mdash; {alert['flag']}
-                    </span>
-                    <span style="color:#64748b; font-size:0.75rem;">{alert.get('stat', '')}</span>
+    # Summary stats
+    high_risk_count = len(scored_df[scored_df["insider_risk_score"] >= 60])
+    avg_risk = scored_df["insider_risk_score"].mean()
+    max_risk_row = scored_df.loc[scored_df["insider_risk_score"].idxmax()] if len(scored_df) > 0 else None
+
+    r1, r2, r3 = st.columns(3)
+    r1.metric("High+ Risk Markets", f"{high_risk_count}")
+    r2.metric("Avg Risk Score", f"{avg_risk:.1f}")
+    r3.metric("Max Risk Score", f"{max_risk_row['insider_risk_score']:.0f}" if max_risk_row is not None else "N/A")
+
+    st.markdown("")
+
+    insider_tab1, insider_tab2, insider_tab3, insider_tab4, insider_tab5 = st.tabs([
+        "Whale Alerts", "Risk Leaderboard", "Signal Heatmap", "Risk Radar", "Full Risk Table"
+    ])
+
+    # --- Tab 1: Whale Alerts (original alerts) --------------------------------
+    with insider_tab1:
+        if alerts:
+            for alert in alerts:
+                severity_colors = {
+                    "critical": ("#ff0040", "#4a0011", "\u26a0\ufe0f CRITICAL"),
+                    "high": ("#f97316", "#431407", "\U0001f6a8 HIGH"),
+                    "medium": ("#fbbf24", "#451a03", "\u26a1 MEDIUM"),
+                }
+                color, bg, label = severity_colors.get(alert["severity"], ("#fbbf24", "#451a03", "\u26a1"))
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, {bg}, #0e1117);
+                    border: 1px solid {color};
+                    border-left: 5px solid {color};
+                    border-radius: 10px;
+                    padding: 16px 20px;
+                    margin-bottom: 12px;
+                    box-shadow: 0 0 20px {color}33;
+                ">
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                        <span style="color:{color}; font-weight:800; font-size:0.8rem;
+                                     letter-spacing:1px; text-transform:uppercase;">
+                            {label} &mdash; {alert['flag']}
+                        </span>
+                        <span style="color:#64748b; font-size:0.75rem;">{alert.get('stat', '')}</span>
+                    </div>
+                    <div style="color:#f1f5f9; font-weight:600; font-size:0.95rem; margin-bottom:6px;">
+                        {alert['question'][:90]}{'...' if len(alert['question']) > 90 else ''}
+                    </div>
+                    <div style="display:flex; gap:20px; flex-wrap:wrap;">
+                        <span style="color:#a78bfa; font-size:0.8rem;">
+                            Volume: <b style="color:#f1f5f9;">${alert['volume']:,.0f}</b>
+                        </span>
+                        <span style="color:#a78bfa; font-size:0.8rem;">
+                            Liquidity: <b style="color:#f1f5f9;">${alert['liquidity']:,.0f}</b>
+                        </span>
+                        <span style="color:#a78bfa; font-size:0.8rem;">
+                            YES: <b style="color:#34d399;">{alert['yes']:.1f}%</b>
+                        </span>
+                        <span style="color:#a78bfa; font-size:0.8rem;">
+                            NO: <b style="color:#fb7185;">{alert['no']:.1f}%</b>
+                        </span>
+                        <span style="color:#a78bfa; font-size:0.8rem;">
+                            Vol/Liq Ratio: <b style="color:#fbbf24;">{alert.get('ratio', 'N/A')}</b>
+                        </span>
+                    </div>
                 </div>
-                <div style="color:#f1f5f9; font-weight:600; font-size:0.95rem; margin-bottom:6px;">
-                    {alert['question'][:90]}{'...' if len(alert['question']) > 90 else ''}
-                </div>
-                <div style="display:flex; gap:20px; flex-wrap:wrap;">
-                    <span style="color:#a78bfa; font-size:0.8rem;">
-                        Volume: <b style="color:#f1f5f9;">${alert['volume']:,.0f}</b>
-                    </span>
-                    <span style="color:#a78bfa; font-size:0.8rem;">
-                        Liquidity: <b style="color:#f1f5f9;">${alert['liquidity']:,.0f}</b>
-                    </span>
-                    <span style="color:#a78bfa; font-size:0.8rem;">
-                        YES: <b style="color:#34d399;">{alert['yes']:.1f}%</b>
-                    </span>
-                    <span style="color:#a78bfa; font-size:0.8rem;">
-                        NO: <b style="color:#fb7185;">{alert['no']:.1f}%</b>
-                    </span>
-                    <span style="color:#a78bfa; font-size:0.8rem;">
-                        Vol/Liq Ratio: <b style="color:#fbbf24;">{alert.get('ratio', 'N/A')}</b>
-                    </span>
-                </div>
-            </div>
-            """, unsafe_allow_html=True)
-    else:
+                """, unsafe_allow_html=True)
+        else:
+            st.markdown(
+                "<div style='text-align:center; padding:2rem; color:#64748b;'>"
+                "No suspicious activity detected in current dataset.</div>",
+                unsafe_allow_html=True,
+            )
+
+    # --- Tab 2: Risk Leaderboard Chart ----------------------------------------
+    with insider_tab2:
+        fig_lb = plot_risk_leaderboard(scored_df, n=min(chart_count, 15))
+        st.pyplot(fig_lb)
+        plt.close(fig_lb)
+
+    # --- Tab 3: Signal Heatmap ------------------------------------------------
+    with insider_tab3:
         st.markdown(
-            "<div style='text-align:center; padding:2rem; color:#64748b;'>"
-            "No suspicious activity detected in current dataset.</div>",
+            "<span style='color:#94a3b8; font-size:0.85rem;'>"
+            "Each cell shows signal strength. Brighter = stronger signal. "
+            "Markets flagged across multiple dimensions are most suspicious.</span>",
             unsafe_allow_html=True,
+        )
+        fig_hm = plot_risk_heatmap(scored_df, n=min(chart_count, 15))
+        st.pyplot(fig_hm)
+        plt.close(fig_hm)
+
+    # --- Tab 4: Radar / Deep-Dive on single market ----------------------------
+    with insider_tab4:
+        st.markdown("**Select a market to see its risk profile breakdown:**")
+        top_risky = scored_df.nlargest(20, "insider_risk_score")
+        options = {
+            f"[{row['insider_risk_score']:.0f}] {row['question'][:70]}": idx
+            for idx, row in top_risky.iterrows()
+        }
+        if options:
+            selected_label = st.selectbox("Market", list(options.keys()))
+            selected_idx = options[selected_label]
+            selected_row = scored_df.loc[selected_idx]
+
+            rc1, rc2 = st.columns([1, 1])
+            with rc1:
+                fig_radar = plot_risk_radar(selected_row)
+                st.pyplot(fig_radar)
+                plt.close(fig_radar)
+            with rc2:
+                st.markdown(render_risk_score_gauge(selected_row["insider_risk_score"]), unsafe_allow_html=True)
+                st.markdown("")
+                st.markdown(f"""
+                <div style="background:#1e1b4b; border-radius:10px; padding:16px; margin-top:8px;">
+                    <div style="color:#f1f5f9; font-weight:700; margin-bottom:12px;">Signal Breakdown</div>
+                    <div style="color:#a78bfa; font-size:0.85rem; line-height:2;">
+                        Vol/Liq Imbalance: <b style="color:#f1f5f9;">{selected_row['sig_imbalance']:.1f}</b> / 25<br>
+                        Conviction Score: <b style="color:#f1f5f9;">{selected_row['sig_conviction']:.1f}</b> / 25<br>
+                        Volume Outlier: <b style="color:#f1f5f9;">{selected_row['sig_volume_outlier']:.1f}</b> / 20<br>
+                        Liquidity Drain: <b style="color:#f1f5f9;">{selected_row['sig_liq_drain']:.1f}</b> / 15<br>
+                        One-Sided Flow: <b style="color:#f1f5f9;">{selected_row['sig_onesided']:.1f}</b> / 15<br>
+                        <hr style="border-color:#3b3b5c; margin:8px 0;">
+                        <span style="font-size:1rem;">Composite: <b style="color:#fbbf24; font-size:1.2rem;">
+                        {selected_row['insider_risk_score']:.1f}</b> / 100</span>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                st.markdown(f"""
+                <div style="background:#0f1729; border:1px solid #3b3b5c; border-radius:10px;
+                            padding:14px; margin-top:12px;">
+                    <div style="color:#64748b; font-size:0.75rem; text-transform:uppercase;
+                                letter-spacing:1px; margin-bottom:6px;">Market Details</div>
+                    <div style="color:#e2e8f0; font-size:0.85rem; line-height:1.8;">
+                        Volume: <b>${selected_row['volume_usd']:,.0f}</b><br>
+                        Liquidity: <b>${selected_row['liquidity_usd']:,.0f}</b><br>
+                        YES: <b style="color:#34d399;">{selected_row['yes_probability']:.1f}%</b>
+                        &nbsp; NO: <b style="color:#fb7185;">{selected_row['no_probability']:.1f}%</b><br>
+                        Vol/Liq Ratio: <b style="color:#fbbf24;">{selected_row['vol_liq_ratio']:.1f}x</b>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+    # --- Tab 5: Full Risk Table -----------------------------------------------
+    with insider_tab5:
+        risk_display = scored_df[[
+            "question", "insider_risk_score", "risk_level",
+            "yes_probability", "no_probability", "volume_usd", "liquidity_usd",
+            "vol_liq_ratio",
+        ]].copy()
+        risk_display.columns = [
+            "Question", "Risk Score", "Risk Level",
+            "YES %", "NO %", "Volume (USD)", "Liquidity (USD)",
+            "Vol/Liq Ratio",
+        ]
+        risk_display = risk_display.sort_values("Risk Score", ascending=False)
+        st.dataframe(
+            risk_display.style
+                .background_gradient(subset=["Risk Score"], cmap="YlOrRd")
+                .background_gradient(subset=["Vol/Liq Ratio"], cmap="OrRd")
+                .format({
+                    "Risk Score": "{:.1f}", "YES %": "{:.1f}", "NO %": "{:.1f}",
+                    "Volume (USD)": "${:,.0f}", "Liquidity (USD)": "${:,.0f}",
+                    "Vol/Liq Ratio": "{:.1f}x",
+                }),
+            use_container_width=True,
+            height=450,
         )
 
     st.divider()
