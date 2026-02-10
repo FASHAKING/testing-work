@@ -131,6 +131,88 @@ def safe_float(val, default=0.0) -> float:
         return default
 
 
+def detect_suspicious_markets(df: pd.DataFrame) -> list[dict]:
+    """
+    Detect markets with suspicious or unusual activity patterns.
+    Flags:
+      - Extreme volume/liquidity ratio (whale dumping or thin book manipulation)
+      - Very high volume + extreme probability (possible insider / coordinated move)
+      - Statistical outlier volume (>2 std devs above mean)
+      - Near-certain markets with unusual liquidity (exit scam setup)
+    """
+    alerts = []
+    if len(df) < 3:
+        return alerts
+
+    vol_mean = df["volume_usd"].mean()
+    vol_std = df["volume_usd"].std()
+    liq_mean = df["liquidity_usd"].mean()
+
+    for _, row in df.iterrows():
+        vol = row["volume_usd"]
+        liq = row["liquidity_usd"]
+        yes = row["yes_probability"] if pd.notna(row["yes_probability"]) else 50
+        no = row["no_probability"] if pd.notna(row["no_probability"]) else 50
+        q = row["question"]
+        ratio = vol / liq if liq > 0 else 0
+
+        base = {
+            "question": q,
+            "volume": vol,
+            "liquidity": liq,
+            "yes": yes,
+            "no": no,
+            "ratio": f"{ratio:.1f}x",
+        }
+
+        # CRITICAL: Extreme volume/liquidity ratio with significant volume
+        if ratio > 50 and vol > vol_mean:
+            alerts.append({
+                **base,
+                "severity": "critical",
+                "flag": "Extreme Vol/Liq Ratio",
+                "stat": f"{ratio:.0f}x ratio \u2014 possible thin-book manipulation",
+            })
+        # HIGH: Statistical outlier volume (>2 std devs)
+        elif vol_std > 0 and vol > vol_mean + 2 * vol_std:
+            alerts.append({
+                **base,
+                "severity": "high",
+                "flag": "Volume Outlier",
+                "stat": f"{((vol - vol_mean) / vol_std):.1f} std devs above mean",
+            })
+        # HIGH: Big money on near-certain outcome
+        elif vol > vol_mean * 1.5 and (yes > 95 or yes < 5):
+            alerts.append({
+                **base,
+                "severity": "high",
+                "flag": "Large Position on Extreme Odds",
+                "stat": f"{'YES' if yes > 95 else 'NO'} at {max(yes, no):.1f}% with ${vol:,.0f} volume",
+            })
+        # MEDIUM: High volume/liquidity ratio
+        elif ratio > 20 and vol > vol_mean * 0.5:
+            alerts.append({
+                **base,
+                "severity": "medium",
+                "flag": "Elevated Vol/Liq Ratio",
+                "stat": f"{ratio:.0f}x ratio \u2014 volume outpacing available liquidity",
+            })
+        # MEDIUM: Very low liquidity but non-trivial volume
+        elif liq > 0 and liq < liq_mean * 0.1 and vol > vol_mean * 0.5:
+            alerts.append({
+                **base,
+                "severity": "medium",
+                "flag": "Thin Liquidity with Active Trading",
+                "stat": f"Only ${liq:,.0f} liquidity vs ${vol:,.0f} volume",
+            })
+
+    # Sort by severity
+    severity_order = {"critical": 0, "high": 1, "medium": 2}
+    alerts.sort(key=lambda a: severity_order.get(a["severity"], 3))
+
+    return alerts[:15]  # Cap at 15 alerts
+
+
 # ---------------------------------------------------------------------------
 # Chart helpers
 # ---------------------------------------------------------------------------
@@ -457,8 +539,15 @@ def main():
 
     st.sidebar.divider()
     st.sidebar.markdown(
-        "<div style='text-align:center; color:#64748b; font-size:0.75rem;'>"
-        "Powered by Gamma API<br>Built with Streamlit</div>",
+        "<div style='text-align:center; padding: 0.5rem;'>"
+        "<span style='color:#64748b; font-size:0.75rem;'>Powered by Gamma API</span><br>"
+        "<span style='color:#64748b; font-size:0.75rem;'>Built with Streamlit</span><br><br>"
+        "<a href='https://x.com/FASHAKING3' target='_blank' style='text-decoration:none;'>"
+        "<span style='background: linear-gradient(90deg, #f093fb, #f5576c, #fda085); "
+        "-webkit-background-clip: text; -webkit-text-fill-color: transparent; "
+        "font-weight: 900; font-size: 0.95rem; letter-spacing: 0.5px;'>"
+        "Built by fashaking</span></a>"
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -599,6 +688,73 @@ def main():
 
     st.divider()
 
+    # --- Whale Alert / Suspicious Activity ------------------------------------
+    st.subheader("Whale Alert \u2014 Suspicious Activity Detector")
+    st.markdown(
+        "<span style='color:#94a3b8; font-size:0.85rem;'>"
+        "Flagging markets with unusual patterns: massive volume relative to liquidity, "
+        "extreme probabilities with big money, and statistical outliers.</span>",
+        unsafe_allow_html=True,
+    )
+
+    alerts = detect_suspicious_markets(df)
+
+    if alerts:
+        for alert in alerts:
+            severity_colors = {
+                "critical": ("#ff0040", "#4a0011", "\u26a0\ufe0f CRITICAL"),
+                "high": ("#f97316", "#431407", "\U0001f6a8 HIGH"),
+                "medium": ("#fbbf24", "#451a03", "\u26a1 MEDIUM"),
+            }
+            color, bg, label = severity_colors.get(alert["severity"], ("#fbbf24", "#451a03", "\u26a1"))
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, {bg}, #0e1117);
+                border: 1px solid {color};
+                border-left: 5px solid {color};
+                border-radius: 10px;
+                padding: 16px 20px;
+                margin-bottom: 12px;
+                box-shadow: 0 0 20px {color}33;
+            ">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <span style="color:{color}; font-weight:800; font-size:0.8rem;
+                                 letter-spacing:1px; text-transform:uppercase;">
+                        {label} &mdash; {alert['flag']}
+                    </span>
+                    <span style="color:#64748b; font-size:0.75rem;">{alert.get('stat', '')}</span>
+                </div>
+                <div style="color:#f1f5f9; font-weight:600; font-size:0.95rem; margin-bottom:6px;">
+                    {alert['question'][:90]}{'...' if len(alert['question']) > 90 else ''}
+                </div>
+                <div style="display:flex; gap:20px; flex-wrap:wrap;">
+                    <span style="color:#a78bfa; font-size:0.8rem;">
+                        Volume: <b style="color:#f1f5f9;">${alert['volume']:,.0f}</b>
+                    </span>
+                    <span style="color:#a78bfa; font-size:0.8rem;">
+                        Liquidity: <b style="color:#f1f5f9;">${alert['liquidity']:,.0f}</b>
+                    </span>
+                    <span style="color:#a78bfa; font-size:0.8rem;">
+                        YES: <b style="color:#34d399;">{alert['yes']:.1f}%</b>
+                    </span>
+                    <span style="color:#a78bfa; font-size:0.8rem;">
+                        NO: <b style="color:#fb7185;">{alert['no']:.1f}%</b>
+                    </span>
+                    <span style="color:#a78bfa; font-size:0.8rem;">
+                        Vol/Liq Ratio: <b style="color:#fbbf24;">{alert.get('ratio', 'N/A')}</b>
+                    </span>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.markdown(
+            "<div style='text-align:center; padding:2rem; color:#64748b;'>"
+            "No suspicious activity detected in current dataset.</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
+
     # --- Single market detail -------------------------------------------------
     st.subheader("Market Detail Lookup")
     market_id_input = st.text_input(
@@ -620,11 +776,18 @@ def main():
         "<div style='text-align:center; padding:1.5rem;'>"
         "<span style='background: linear-gradient(90deg, #f093fb, #f5576c, #fda085); "
         "-webkit-background-clip: text; -webkit-text-fill-color: transparent; "
-        "font-weight: 800; font-size: 1.1rem;'>"
+        "font-weight: 800; font-size: 1.3rem;'>"
         "Polymarket Dashboard</span>"
         "<br><span style='color:#64748b; font-size: 0.8rem;'>"
-        "Powered by the Gamma API &bull; Built with Streamlit &bull; Data updates on every refresh"
-        "</span></div>",
+        "Powered by the Gamma API &bull; Data updates on every refresh"
+        "</span>"
+        "<br><br>"
+        "<a href='https://x.com/FASHAKING3' target='_blank' style='text-decoration:none;'>"
+        "<span style='background: linear-gradient(90deg, #667eea, #764ba2, #f093fb); "
+        "-webkit-background-clip: text; -webkit-text-fill-color: transparent; "
+        "font-weight: 900; font-size: 1.1rem; letter-spacing: 1px;'>"
+        "Built by fashaking</span></a>"
+        "</div>",
         unsafe_allow_html=True,
     )
 
