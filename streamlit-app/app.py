@@ -407,7 +407,7 @@ def plot_risk_leaderboard(scored_df: pd.DataFrame, n: int = 10) -> plt.Figure:
 
 
 def render_risk_score_gauge(score: float) -> str:
-    """Render an HTML gauge for a single risk score."""
+    """Render an animated circular risk gauge + bar gauge."""
     if score >= 80:
         color, glow, label = "#ff0040", "rgba(255,0,64,0.4)", "CRITICAL"
     elif score >= 60:
@@ -420,18 +420,40 @@ def render_risk_score_gauge(score: float) -> str:
         color, glow, label = "#22c55e", "rgba(34,197,94,0.3)", "LOW"
 
     pct = min(score, 100)
+    deg = pct * 3.6  # 360 degrees for 100%
+
     return f"""
-    <div style="margin-bottom:6px;">
-        <div style="display:flex; justify-content:space-between; margin-bottom:3px;">
-            <span style="color:{color}; font-weight:800; font-size:0.75rem;
-                         letter-spacing:1px;">{label}</span>
-            <span style="color:{color}; font-weight:800; font-size:0.9rem;">{score:.0f}/100</span>
+    <div style="text-align:center; animation: fadeInUp 0.5s ease-out;">
+        <!-- Circular gauge -->
+        <div style="position:relative; width:140px; height:140px; margin:0 auto 16px auto;">
+            <div style="width:140px; height:140px; border-radius:50%;
+                        background: conic-gradient({color} {deg}deg, #1e1b4b {deg}deg);
+                        display:flex; align-items:center; justify-content:center;
+                        box-shadow: 0 0 25px {glow}, inset 0 0 25px rgba(0,0,0,0.5);
+                        animation: pulse-ring 3s ease-in-out infinite;">
+                <div style="width:100px; height:100px; border-radius:50%; background:#0e1117;
+                            display:flex; flex-direction:column; align-items:center; justify-content:center;
+                            box-shadow: inset 0 2px 8px rgba(0,0,0,0.5);">
+                    <span style="color:{color}; font-family:'Orbitron',sans-serif;
+                                 font-size:1.6rem; font-weight:900;
+                                 text-shadow: 0 0 15px {glow};">{score:.0f}</span>
+                    <span style="color:#64748b; font-size:0.6rem; font-weight:600;
+                                 letter-spacing:1px;">/ 100</span>
+                </div>
+            </div>
         </div>
-        <div style="background:#1e1b4b; border-radius:6px; height:10px; overflow:hidden;
-                    box-shadow: inset 0 1px 3px rgba(0,0,0,0.5);">
+        <span style="color:{color}; font-weight:800; font-size:0.85rem;
+                     letter-spacing:2px; text-shadow: 0 0 10px {glow};">{label}</span>
+    </div>
+    <!-- Bar gauge -->
+    <div style="margin-top:12px;">
+        <div style="background:#1e1b4b; border-radius:8px; height:12px; overflow:hidden;
+                    box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);">
             <div style="width:{pct}%; height:100%;
-                        background: linear-gradient(90deg, {color}99, {color});
-                        border-radius:6px; box-shadow: 0 0 8px {glow};"></div>
+                        background: linear-gradient(90deg, {color}66, {color});
+                        background-size: 200% auto; animation: shimmer 2s linear infinite;
+                        border-radius:8px; box-shadow: 0 0 12px {glow};
+                        transition: width 1.5s ease;"></div>
         </div>
     </div>
     """
@@ -580,24 +602,33 @@ def _wrap(text: str, width: int) -> str:
 # ---------------------------------------------------------------------------
 
 def render_spotlight_card(title: str, question: str, value: str, color: str, bg: str):
-    """Render a bold spotlight card with HTML."""
+    """Render a bold spotlight card with glassmorphism and animations."""
     st.markdown(f"""
     <div style="
-        background: linear-gradient(135deg, {bg}, #0e1117);
+        background: linear-gradient(135deg, {bg}cc, rgba(14,17,23,0.7));
+        backdrop-filter: blur(10px);
+        -webkit-backdrop-filter: blur(10px);
         border-left: 5px solid {color};
-        border-radius: 12px;
-        padding: 20px;
+        border: 1px solid {color}44;
+        border-left: 5px solid {color};
+        border-radius: 16px;
+        padding: 22px;
         margin-bottom: 8px;
-        box-shadow: 0 4px 20px rgba(0,0,0,0.3);
-    ">
-        <div style="color: {color}; font-size: 0.8rem; font-weight: 700; text-transform: uppercase;
-                    letter-spacing: 1px; margin-bottom: 6px;">
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3), inset 0 1px 0 {color}22;
+        animation: fadeInUp 0.6s ease-out, float 6s ease-in-out infinite;
+        transition: transform 0.3s, box-shadow 0.3s;
+    " onmouseover="this.style.transform='translateY(-4px) scale(1.02)';this.style.boxShadow='0 12px 40px {color}33'"
+       onmouseout="this.style.transform='';this.style.boxShadow=''">
+        <div style="color: {color}; font-size: 0.75rem; font-weight: 700; text-transform: uppercase;
+                    letter-spacing: 1.5px; margin-bottom: 8px; opacity:0.9;">
             {title}
         </div>
-        <div style="color: #f1f5f9; font-size: 1rem; font-weight: 600; margin-bottom: 8px;">
+        <div style="color: #f1f5f9; font-size: 0.95rem; font-weight: 600; margin-bottom: 10px;
+                    line-height: 1.4;">
             {question[:80]}{'...' if len(question) > 80 else ''}
         </div>
-        <div style="color: {color}; font-size: 1.8rem; font-weight: 800;">
+        <div style="color: {color}; font-size: 2rem; font-weight: 900;
+                    font-family: 'Orbitron', sans-serif; text-shadow: 0 0 20px {color}55;">
             {value}
         </div>
     </div>
@@ -605,18 +636,25 @@ def render_spotlight_card(title: str, question: str, value: str, color: str, bg:
 
 
 def render_prob_bar(yes: float, no: float) -> str:
-    """Return an HTML inline probability bar."""
+    """Return an HTML inline animated probability bar."""
     yes_w = max(yes, 0)
     no_w = max(no, 0)
     return f"""
-    <div style="display:flex; border-radius:6px; overflow:hidden; height:22px; width:100%;
-                background:#1e1b4b; box-shadow: inset 0 1px 3px rgba(0,0,0,0.4);">
-        <div style="width:{yes_w}%; background: linear-gradient(90deg, #059669, #34d399);
+    <div style="display:flex; border-radius:8px; overflow:hidden; height:26px; width:100%;
+                background:#1e1b4b; box-shadow: inset 0 2px 4px rgba(0,0,0,0.5);
+                animation: fadeInUp 0.4s ease-out;">
+        <div style="width:{yes_w}%; background: linear-gradient(90deg, #059669, #34d399, #6ee7b7);
+                    background-size: 200% auto; animation: shimmer 3s linear infinite;
                     display:flex; align-items:center; justify-content:center;
-                    color:#fff; font-size:11px; font-weight:700;">{yes_w:.0f}%</div>
-        <div style="width:{no_w}%; background: linear-gradient(90deg, #fb7185, #e11d48);
+                    color:#fff; font-size:11px; font-weight:800;
+                    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+                    transition: width 1s ease;">{yes_w:.0f}%</div>
+        <div style="width:{no_w}%; background: linear-gradient(90deg, #e11d48, #fb7185, #fda4af);
+                    background-size: 200% auto; animation: shimmer 3s linear infinite;
                     display:flex; align-items:center; justify-content:center;
-                    color:#fff; font-size:11px; font-weight:700;">{no_w:.0f}%</div>
+                    color:#fff; font-size:11px; font-weight:800;
+                    text-shadow: 0 1px 2px rgba(0,0,0,0.3);
+                    transition: width 1s ease;">{no_w:.0f}%</div>
     </div>
     """
 
@@ -626,101 +664,237 @@ def render_prob_bar(yes: float, no: float) -> str:
 # ---------------------------------------------------------------------------
 
 def inject_custom_css():
-    """Inject custom CSS for a vibrant, colorful dashboard."""
+    """Inject custom CSS with animations, glassmorphism, and visual effects."""
     st.markdown("""
     <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800;900&display=swap');
-    /* Global font */
+    @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@700;900&display=swap');
+
+    /* ===== KEYFRAME ANIMATIONS ===== */
+    @keyframes gradientShift {
+        0% { background-position: 0% 50%; }
+        50% { background-position: 100% 50%; }
+        100% { background-position: 0% 50%; }
+    }
+    @keyframes float {
+        0%, 100% { transform: translateY(0px); }
+        50% { transform: translateY(-6px); }
+    }
+    @keyframes pulse-glow {
+        0%, 100% { box-shadow: 0 0 15px rgba(124, 58, 237, 0.3); }
+        50% { box-shadow: 0 0 30px rgba(124, 58, 237, 0.6), 0 0 60px rgba(124, 58, 237, 0.2); }
+    }
+    @keyframes shimmer {
+        0% { background-position: -200% center; }
+        100% { background-position: 200% center; }
+    }
+    @keyframes borderGlow {
+        0%, 100% { border-color: #6366f1; box-shadow: 0 0 10px rgba(99,102,241,0.3); }
+        33% { border-color: #a855f7; box-shadow: 0 0 10px rgba(168,85,247,0.3); }
+        66% { border-color: #ec4899; box-shadow: 0 0 10px rgba(236,72,153,0.3); }
+    }
+    @keyframes slideIn {
+        from { opacity: 0; transform: translateX(-20px); }
+        to { opacity: 1; transform: translateX(0); }
+    }
+    @keyframes fadeInUp {
+        from { opacity: 0; transform: translateY(15px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes ticker-scroll {
+        0% { transform: translateX(0); }
+        100% { transform: translateX(-50%); }
+    }
+    @keyframes particle-float-1 {
+        0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.3; }
+        25% { transform: translate(100px, -200px) scale(1.5); opacity: 0.1; }
+        50% { transform: translate(-50px, -400px) scale(0.8); opacity: 0.4; }
+        75% { transform: translate(150px, -100px) scale(1.2); opacity: 0.2; }
+    }
+    @keyframes particle-float-2 {
+        0%, 100% { transform: translate(0, 0) scale(1); opacity: 0.2; }
+        33% { transform: translate(-120px, -300px) scale(1.3); opacity: 0.4; }
+        66% { transform: translate(80px, -150px) scale(0.7); opacity: 0.1; }
+    }
+    @keyframes spin-slow {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+    }
+    @keyframes pulse-ring {
+        0% { transform: scale(0.95); opacity: 1; }
+        50% { transform: scale(1.05); opacity: 0.7; }
+        100% { transform: scale(0.95); opacity: 1; }
+    }
+
+    /* ===== GLOBAL ===== */
     html, body, [class*="css"] {
         font-family: 'Inter', sans-serif;
     }
-    /* Gradient header banner */
+
+    /* ===== ANIMATED BACKGROUND PARTICLES ===== */
+    .stApp::before {
+        content: '';
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        z-index: 0;
+        background:
+            radial-gradient(2px 2px at 10% 20%, rgba(139,92,246,0.3), transparent),
+            radial-gradient(2px 2px at 30% 60%, rgba(236,72,153,0.2), transparent),
+            radial-gradient(3px 3px at 50% 10%, rgba(99,102,241,0.3), transparent),
+            radial-gradient(2px 2px at 70% 80%, rgba(168,85,247,0.2), transparent),
+            radial-gradient(2px 2px at 90% 40%, rgba(244,114,182,0.3), transparent),
+            radial-gradient(3px 3px at 20% 90%, rgba(99,102,241,0.2), transparent),
+            radial-gradient(2px 2px at 80% 15%, rgba(139,92,246,0.25), transparent),
+            radial-gradient(2px 2px at 45% 75%, rgba(236,72,153,0.15), transparent);
+        animation: particle-float-1 20s ease-in-out infinite;
+    }
+    .stApp::after {
+        content: '';
+        position: fixed;
+        top: 0; left: 0;
+        width: 100%; height: 100%;
+        pointer-events: none;
+        z-index: 0;
+        background:
+            radial-gradient(300px 300px at 20% 30%, rgba(99,102,241,0.05), transparent),
+            radial-gradient(400px 400px at 80% 70%, rgba(168,85,247,0.04), transparent),
+            radial-gradient(350px 350px at 50% 50%, rgba(236,72,153,0.03), transparent);
+        animation: particle-float-2 30s ease-in-out infinite;
+    }
+
+    /* ===== ANIMATED GRADIENT HEADER ===== */
     .main > div:first-child {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        background: linear-gradient(-45deg, #667eea, #764ba2, #f093fb, #6366f1, #ec4899);
+        background-size: 400% 400%;
+        animation: gradientShift 8s ease infinite;
         padding: 0.5rem;
         border-radius: 0 0 16px 16px;
     }
-    /* Title styling */
+
+    /* ===== TITLE — animated gradient text ===== */
     h1 {
-        background: linear-gradient(90deg, #f093fb, #f5576c, #fda085, #f5af19);
+        background: linear-gradient(90deg, #f093fb, #f5576c, #fda085, #f5af19, #f093fb);
+        background-size: 200% auto;
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         font-weight: 900 !important;
-        font-size: 2.5rem !important;
+        font-size: 2.8rem !important;
+        animation: shimmer 4s linear infinite;
     }
-    /* Section headers */
+
+    /* ===== SECTION HEADERS ===== */
     h2 {
         color: #a78bfa !important;
         font-weight: 800 !important;
         border-bottom: 2px solid #6366f1;
         padding-bottom: 6px;
+        animation: fadeInUp 0.5s ease-out;
     }
     h3 {
         color: #818cf8 !important;
         font-weight: 700 !important;
     }
-    /* Metric cards */
+
+    /* ===== METRIC CARDS — glassmorphism + float + pulse ===== */
     div[data-testid="stMetric"] {
-        background: linear-gradient(135deg, #1e1e2f, #2d2b55);
-        border: 1px solid #7c3aed;
-        border-radius: 12px;
-        padding: 16px;
-        box-shadow: 0 4px 15px rgba(124, 58, 237, 0.3);
-        transition: transform 0.2s, box-shadow 0.2s;
+        background: linear-gradient(135deg, rgba(30,30,47,0.8), rgba(45,43,85,0.6));
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+        border: 1px solid rgba(124,58,237,0.4);
+        border-radius: 16px;
+        padding: 18px;
+        animation: pulse-glow 3s ease-in-out infinite, fadeInUp 0.6s ease-out;
+        transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s;
     }
     div[data-testid="stMetric"]:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 8px 25px rgba(124, 58, 237, 0.5);
+        transform: translateY(-5px) scale(1.02);
+        box-shadow: 0 12px 35px rgba(124, 58, 237, 0.5);
     }
     div[data-testid="stMetric"] label {
         color: #a78bfa !important;
         font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.5px;
-        font-size: 0.75rem !important;
+        letter-spacing: 1px;
+        font-size: 0.7rem !important;
     }
     div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
         color: #f1f5f9 !important;
         font-size: 1.6rem !important;
         font-weight: 800 !important;
+        font-family: 'Orbitron', sans-serif !important;
     }
-    /* Sidebar styling */
+
+    /* ===== SIDEBAR — animated gradient ===== */
     section[data-testid="stSidebar"] {
-        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+        background: linear-gradient(180deg, #0d0d1a 0%, #1a1a2e 30%, #16213e 60%, #0f3460 100%);
     }
     section[data-testid="stSidebar"] h2, section[data-testid="stSidebar"] h3 {
         color: #e2e8f0 !important;
         border-bottom: none;
     }
-    /* Dataframe container */
+
+    /* ===== DATAFRAME — animated border glow ===== */
     div[data-testid="stDataFrame"] {
         border: 2px solid #6366f1;
-        border-radius: 12px;
+        border-radius: 14px;
         overflow: hidden;
-        box-shadow: 0 4px 20px rgba(99, 102, 241, 0.2);
+        animation: borderGlow 4s ease-in-out infinite;
     }
-    /* Search input */
+
+    /* ===== SEARCH INPUT — animated focus ===== */
     div[data-testid="stTextInput"] input {
         border: 2px solid #8b5cf6 !important;
-        border-radius: 8px !important;
+        border-radius: 10px !important;
         font-weight: 600;
+        transition: all 0.3s ease;
     }
     div[data-testid="stTextInput"] input:focus {
         border-color: #f472b6 !important;
-        box-shadow: 0 0 15px rgba(244, 114, 182, 0.5) !important;
+        box-shadow: 0 0 20px rgba(244, 114, 182, 0.5),
+                    0 0 40px rgba(244, 114, 182, 0.2) !important;
+        transform: scale(1.01);
     }
-    /* Tabs */
+
+    /* ===== TABS — animated underline ===== */
     button[data-baseweb="tab"] {
         font-weight: 700 !important;
+        transition: all 0.3s ease;
     }
-    /* Divider lines */
+    button[data-baseweb="tab"]:hover {
+        color: #f472b6 !important;
+    }
+    button[data-baseweb="tab"][aria-selected="true"] {
+        color: #a78bfa !important;
+    }
+
+    /* ===== DIVIDER — animated gradient ===== */
     hr {
-        border-image: linear-gradient(90deg, #6366f1, #a855f7, #ec4899) 1 !important;
+        border: none !important;
+        height: 2px !important;
+        background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899, #f97316, #a855f7, #6366f1) !important;
+        background-size: 200% auto !important;
+        animation: shimmer 3s linear infinite !important;
     }
-    /* Expander */
+
+    /* ===== EXPANDER ===== */
     details {
         border: 1px solid #6366f1 !important;
-        border-radius: 8px !important;
+        border-radius: 10px !important;
+        transition: border-color 0.3s;
+    }
+    details:hover {
+        border-color: #a855f7 !important;
+    }
+
+    /* ===== BUTTONS — glow on hover ===== */
+    button[kind="secondary"], .stButton button {
+        transition: all 0.3s ease !important;
+    }
+    .stButton button:hover {
+        box-shadow: 0 0 15px rgba(124, 58, 237, 0.4) !important;
+        transform: translateY(-1px) !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -742,6 +916,18 @@ def main():
     st.title("Polymarket Active Markets Dashboard")
     st.caption(f"Real-time prediction market data \u2022 Last refreshed: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
     st.divider()
+
+    # --- Animated background orbs (decorative) --------------------------------
+    st.markdown("""
+    <div style="position:fixed; top:80px; right:30px; width:120px; height:120px;
+                background: radial-gradient(circle, rgba(139,92,246,0.15), transparent 70%);
+                border-radius:50%; pointer-events:none; z-index:0;
+                animation: pulse-ring 4s ease-in-out infinite;"></div>
+    <div style="position:fixed; bottom:100px; left:20px; width:180px; height:180px;
+                background: radial-gradient(circle, rgba(236,72,153,0.1), transparent 70%);
+                border-radius:50%; pointer-events:none; z-index:0;
+                animation: pulse-ring 6s ease-in-out infinite;"></div>
+    """, unsafe_allow_html=True)
 
     # --- Sidebar --------------------------------------------------------------
     st.sidebar.markdown(
@@ -784,6 +970,30 @@ def main():
         return
 
     df = markets_to_dataframe(raw_markets)
+
+    # --- Scrolling Market Ticker ----------------------------------------------
+    ticker_items = []
+    for _, row in df.head(20).iterrows():
+        q = row["question"][:45] + ("..." if len(row["question"]) > 45 else "")
+        yes = row["yes_probability"]
+        vol = row["volume_usd"]
+        if pd.notna(yes):
+            color = "#34d399" if yes >= 50 else "#fb7185"
+            ticker_items.append(
+                f'<span style="color:#e2e8f0; font-weight:600;">{q}</span>'
+                f'&nbsp;<span style="color:{color}; font-weight:800;">{yes:.0f}%</span>'
+                f'&nbsp;<span style="color:#64748b;">Vol: ${vol:,.0f}</span>'
+            )
+    ticker_html = '&nbsp;&nbsp;&nbsp;\u2022&nbsp;&nbsp;&nbsp;'.join(ticker_items)
+    st.markdown(f"""
+    <div style="overflow:hidden; background: linear-gradient(90deg, #0d0d1a, #1a1a2e, #0d0d1a);
+                border: 1px solid #3b3b5c; border-radius:10px; padding:10px 0; margin-bottom:16px;">
+        <div style="display:flex; white-space:nowrap; animation: ticker-scroll 60s linear infinite;">
+            <span style="font-size:0.8rem; padding:0 20px;">{ticker_html}</span>
+            <span style="font-size:0.8rem; padding:0 20px;">{ticker_html}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
     # --- Summary metric cards -------------------------------------------------
     total_volume = df["volume_usd"].sum()
@@ -1112,24 +1322,40 @@ def main():
 
     # --- Footer ---------------------------------------------------------------
     st.divider()
-    st.markdown(
-        "<div style='text-align:center; padding:1.5rem;'>"
-        "<span style='background: linear-gradient(90deg, #f093fb, #f5576c, #fda085); "
-        "-webkit-background-clip: text; -webkit-text-fill-color: transparent; "
-        "font-weight: 800; font-size: 1.3rem;'>"
-        "Polymarket Dashboard</span>"
-        "<br><span style='color:#64748b; font-size: 0.8rem;'>"
-        "Powered by the Gamma API &bull; Data updates on every refresh"
-        "</span>"
-        "<br><br>"
-        "<a href='https://x.com/FASHAKING3' target='_blank' style='text-decoration:none;'>"
-        "<span style='background: linear-gradient(90deg, #667eea, #764ba2, #f093fb); "
-        "-webkit-background-clip: text; -webkit-text-fill-color: transparent; "
-        "font-weight: 900; font-size: 1.1rem; letter-spacing: 1px;'>"
-        "Built by fashaking</span></a>"
-        "</div>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("""
+    <div style="text-align:center; padding:2rem; animation: fadeInUp 0.8s ease-out;">
+        <div style="display:inline-block; padding:20px 40px;
+                    background: linear-gradient(135deg, rgba(30,30,47,0.6), rgba(14,17,23,0.8));
+                    backdrop-filter: blur(10px); border-radius:20px;
+                    border: 1px solid rgba(99,102,241,0.3);
+                    box-shadow: 0 8px 32px rgba(0,0,0,0.3);">
+            <div style="background: linear-gradient(90deg, #f093fb, #f5576c, #fda085, #f5af19, #f093fb);
+                        background-size: 200% auto; -webkit-background-clip: text;
+                        -webkit-text-fill-color: transparent;
+                        font-weight: 900; font-size: 1.5rem; font-family: 'Orbitron', sans-serif;
+                        animation: shimmer 3s linear infinite; margin-bottom:8px;">
+                POLYMARKET DASHBOARD
+            </div>
+            <div style="color:#64748b; font-size:0.8rem; margin-bottom:12px;">
+                Powered by the Gamma API &bull; Real-time prediction market intelligence
+            </div>
+            <a href="https://x.com/FASHAKING3" target="_blank" style="text-decoration:none;">
+                <div style="display:inline-block; padding:8px 24px;
+                            background: linear-gradient(-45deg, #667eea, #764ba2, #f093fb, #ec4899);
+                            background-size: 300% 300%;
+                            animation: gradientShift 4s ease infinite;
+                            border-radius:30px; transition: transform 0.3s, box-shadow 0.3s;"
+                     onmouseover="this.style.transform='scale(1.05)';this.style.boxShadow='0 0 25px rgba(168,85,247,0.5)'"
+                     onmouseout="this.style.transform='';this.style.boxShadow=''">
+                    <span style="color:#fff; font-weight:800; font-size:0.9rem;
+                                 letter-spacing:1.5px; text-shadow: 0 1px 3px rgba(0,0,0,0.3);">
+                        BUILT BY FASHAKING
+                    </span>
+                </div>
+            </a>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
